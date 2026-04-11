@@ -1,17 +1,20 @@
 import {readFileSync} from "node:fs";
 import path from "node:path";
 
-export type MailProviderName = "2925" | "gmail" | "proxiedmail";
+export type MailProviderName = "2925" | "gmail" | "proxiedmail" | "cloudflare";
 
 interface AppConfigFile {
     provider?: unknown;
     defaultPassword?: unknown;
     loopDelayMs?: unknown;
-    failureDelayMs?: unknown;
     gmailAccessToken?: unknown;
     gmailEmailAddress?: unknown;
     "2925EmailAddress"?: unknown;
     "2925Password"?: unknown;
+    cloudflareEmailDomain?: unknown;
+    cloudflareApiBaseUrl?: unknown;
+    cloudflareApiKey?: unknown;
+    selfHostedEmailDomain?: unknown;
     defaultProxyUrl?: unknown;
 }
 
@@ -19,11 +22,14 @@ export interface AppConfig {
     provider: MailProviderName;
     defaultPassword: string;
     loopDelayMs: number;
-    failureDelayMs: number;
     gmailAccessToken: string;
     gmailEmailAddress: string;
     ["2925EmailAddress"]: string;
     ["2925Password"]: string;
+    cloudflareEmailDomain: string;
+    cloudflareApiBaseUrl: string;
+    cloudflareApiKey: string;
+    selfHostedEmailDomain: string;
     defaultProxyUrl: string;
 }
 
@@ -31,11 +37,14 @@ const DEFAULT_CONFIG: AppConfig = {
     provider: "proxiedmail",
     defaultPassword: "kuaileshifu88",
     loopDelayMs: 120000,
-    failureDelayMs: 120000,
     gmailAccessToken: "",
     gmailEmailAddress: "",
     "2925EmailAddress": "",
     "2925Password": "",
+    cloudflareEmailDomain: "",
+    cloudflareApiBaseUrl: "",
+    cloudflareApiKey: "",
+    selfHostedEmailDomain: "",
     defaultProxyUrl: "http://127.0.0.1:10808",
 };
 
@@ -47,8 +56,11 @@ function normalizeNumber(value: unknown, fallback: number): number {
 }
 
 function normalizeProvider(value: unknown): MailProviderName {
-    if (value === "2925" || value === "gmail" || value === "proxiedmail") {
+    if (value === "2925" || value === "gmail" || value === "proxiedmail" || value === "cloudflare") {
         return value;
+    }
+    if (value === "selfhosted") {
+        return "cloudflare";
     }
     return DEFAULT_CONFIG.provider;
 }
@@ -70,7 +82,6 @@ function loadConfig(): AppConfig {
                 ? parsed.defaultPassword
                 : DEFAULT_CONFIG.defaultPassword,
         loopDelayMs: normalizeNumber(parsed.loopDelayMs, DEFAULT_CONFIG.loopDelayMs),
-        failureDelayMs: normalizeNumber(parsed.failureDelayMs, DEFAULT_CONFIG.failureDelayMs),
         gmailAccessToken:
             typeof parsed.gmailAccessToken === "string"
                 ? parsed.gmailAccessToken.trim()
@@ -87,6 +98,24 @@ function loadConfig(): AppConfig {
             typeof parsed["2925Password"] === "string"
                 ? parsed["2925Password"].trim()
                 : DEFAULT_CONFIG["2925Password"],
+        cloudflareEmailDomain:
+            typeof parsed.cloudflareEmailDomain === "string" && parsed.cloudflareEmailDomain.trim()
+                ? parsed.cloudflareEmailDomain.trim()
+                : typeof parsed.selfHostedEmailDomain === "string"
+                  ? parsed.selfHostedEmailDomain.trim()
+                  : DEFAULT_CONFIG.cloudflareEmailDomain,
+        cloudflareApiBaseUrl:
+            typeof parsed.cloudflareApiBaseUrl === "string"
+                ? parsed.cloudflareApiBaseUrl.trim()
+                : DEFAULT_CONFIG.cloudflareApiBaseUrl,
+        cloudflareApiKey:
+            typeof parsed.cloudflareApiKey === "string"
+                ? parsed.cloudflareApiKey.trim()
+                : DEFAULT_CONFIG.cloudflareApiKey,
+        selfHostedEmailDomain:
+            typeof parsed.selfHostedEmailDomain === "string"
+                ? parsed.selfHostedEmailDomain.trim()
+                : DEFAULT_CONFIG.selfHostedEmailDomain,
         defaultProxyUrl:
             typeof parsed.defaultProxyUrl === "string"
                 ? parsed.defaultProxyUrl.trim()

@@ -28,6 +28,11 @@ export interface SentinelEnv {
     languages: string[];
     screenWidth: number;
     screenHeight: number;
+    innerWidth: number;
+    innerHeight: number;
+    outerWidth: number;
+    outerHeight: number;
+    devicePixelRatio: number;
     hardwareConcurrency: number;
     jsHeapSizeLimit: number;
     timeOrigin: number;
@@ -46,6 +51,95 @@ export interface FetchSentinelTokenOptions {
     userAgent?: string;
 }
 
+const DEFAULT_SENTINEL_VIEWPORT = {
+    width: 1280,
+    height: 720,
+};
+
+const DEFAULT_SENTINEL_DOCUMENT_KEYS = ["location"];
+const DEFAULT_SENTINEL_WINDOW_KEYS = [
+    "0",
+    "1",
+    "window",
+    "self",
+    "document",
+    "name",
+    "location",
+    "customElements",
+    "history",
+    "navigation",
+    "locationbar",
+    "menubar",
+    "personalbar",
+    "scrollbars",
+    "statusbar",
+    "toolbar",
+    "status",
+    "closed",
+    "frames",
+    "length",
+    "top",
+    "opener",
+    "parent",
+    "frameElement",
+    "navigator",
+    "origin",
+    "external",
+    "screen",
+    "innerWidth",
+    "innerHeight",
+    "scrollX",
+    "pageXOffset",
+    "scrollY",
+    "pageYOffset",
+    "visualViewport",
+    "screenX",
+    "screenY",
+    "outerWidth",
+    "outerHeight",
+    "devicePixelRatio",
+    "event",
+    "clientInformation",
+    "screenLeft",
+    "screenTop",
+    "styleMedia",
+    "onsearch",
+    "onappinstalled",
+    "onbeforeinstallprompt",
+    "onabort",
+    "onbeforeinput",
+    "onbeforematch",
+    "onbeforetoggle",
+    "onblur",
+    "oncancel",
+    "oncanplay",
+    "oncanplaythrough",
+    "onchange",
+    "onclick",
+    "onclose",
+    "oncommand",
+    "oncontentvisibilityautostatechange",
+    "oncontextlost",
+    "oncontextmenu",
+    "oncontextrestored",
+    "oncuechange",
+    "ondblclick",
+    "ondrag",
+    "ondragend",
+    "ondragenter",
+    "ondragleave",
+    "ondragover",
+    "ondragstart",
+    "ondrop",
+    "ondurationchange",
+    "onemptied",
+    "onended",
+    "onerror",
+    "onfocus",
+    "onformdata",
+    "oninput",
+];
+
 function defaultScriptSources(): string[] {
     return ["https://sentinel.openai.com/sentinel/20260219f9f6/sdk.js"];
 }
@@ -63,20 +157,21 @@ export function defaultSentinelEnv(userAgent = DEFAULT_USER_AGENT): SentinelEnv 
     return {
         userAgent,
         language: "zh-CN",
-        languages: ["zh-CN", "zh"],
-        screenWidth: 1920,
-        screenHeight: 1080,
+        languages: ["zh-CN"],
+        screenWidth: DEFAULT_SENTINEL_VIEWPORT.width,
+        screenHeight: DEFAULT_SENTINEL_VIEWPORT.height,
+        innerWidth: DEFAULT_SENTINEL_VIEWPORT.width,
+        innerHeight: DEFAULT_SENTINEL_VIEWPORT.height,
+        outerWidth: DEFAULT_SENTINEL_VIEWPORT.width,
+        outerHeight: DEFAULT_SENTINEL_VIEWPORT.height,
+        devicePixelRatio: 1,
         hardwareConcurrency: 20,
         jsHeapSizeLimit: 4294967296,
         timeOrigin: Date.now(),
         scriptSources,
         buildHash: defaultBuildHash(scriptSources),
-        documentKeys: ["location"],
-        windowKeys: [
-            "window", "self", "document", "location", "navigator", "screen", "history",
-            "performance", "innerWidth", "innerHeight", "outerWidth", "outerHeight",
-            "devicePixelRatio", "frames", "top", "parent",
-        ],
+        documentKeys: DEFAULT_SENTINEL_DOCUMENT_KEYS,
+        windowKeys: DEFAULT_SENTINEL_WINDOW_KEYS,
         searchParamKeys: ["sv"],
     };
 }
@@ -87,7 +182,7 @@ export async function fetchSentinelToken(
     const useBrowserSentinel = process.argv.includes("--st");
     if (useBrowserSentinel) {
         try {
-            return await fetchSentinelTokenFromBrowser(options.flow, options.deviceID);
+            return await fetchSentinelTokenFromBrowser(options.flow, options.deviceID, options.userAgent);
         } catch (error) {
             console.error(
                 `browserSentinelTokenFailed: flow=${options.flow} error=${error instanceof Error ? error.message : String(error)}`,
@@ -227,8 +322,8 @@ function collectFingerprintData(env: SentinelEnv, sid: string): unknown[] {
 function randomNavigatorProperty(env: SentinelEnv): string {
     const navigatorShape: Record<string, string | number> = {
         userAgent: env.userAgent,
-        language: "en-US",
-        hardwareConcurrency: 8,
+        language: env.language,
+        hardwareConcurrency: env.hardwareConcurrency,
     };
     const properties = Object.keys(navigatorShape);
     const key = randomPick(properties);
@@ -242,9 +337,18 @@ async function computeTurnstileDx(
 ): Promise<string> {
     let sdkError: unknown = null;
     try {
-        return await computeTurnstileDxViaSdk(requirements, key, env);
+        const sdkResult = await computeTurnstileDxViaSdk(requirements, key, env);
+        const sdkDecoded = tryDecodeBase64Utf8(sdkResult);
+        if (looksLikeEncodedError(sdkDecoded)) {
+            throw new Error(`sdk returned encoded error: ${sdkDecoded}`);
+        }
+        console.log(`sentinelTurnstileSource: sdk len=${sdkResult.length}`);
+        return sdkResult;
     } catch (error) {
         sdkError = error;
+        console.log(
+            `sentinelTurnstileSource: vm sdkError=${error instanceof Error ? error.message : String(error)}`,
+        );
     }
 
     const decoded = Buffer.from(requirements.turnstile?.dx ?? "", "base64").toString(
@@ -271,6 +375,7 @@ async function computeTurnstileDx(
             `turnstile dx 结果异常过短: ops=${program.length} encoded=${encoded} raw=${JSON.stringify(encoded)}`,
         );
     }
+    console.log(`sentinelTurnstileSource: vm len=${encoded.length}`);
     return encoded;
 }
 
@@ -303,6 +408,9 @@ async function loadSdkTurnstileRunner(
     }
 
     const windowObject = buildWindowObject(env);
+    const navigator = createNavigatorObject(env);
+    const localStorage = createStorageStub();
+    const sessionStorage = createStorageStub();
     const location = {
         href: `https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=${env.buildHash}`,
         pathname: "/backend-api/sentinel/frame.html",
@@ -313,20 +421,15 @@ async function loadSdkTurnstileRunner(
         currentScript: {
             src: env.scriptSources[0],
         },
-        head: {
-            appendChild: () => undefined,
-        },
-        createElement: () => ({
-            style: {},
-            addEventListener: () => undefined,
-            contentWindow: {
-                postMessage: () => undefined,
-            },
-        }),
-        documentElement: {
+        head: createDomStub(),
+        body: createDomStub(),
+        createElement: () => createDomStub(),
+        documentElement: createDomStub({
             getAttribute: (name: string) => (name === "data-build" ? env.buildHash : null),
-        },
+        }),
         cookie: "",
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
     };
     const sandbox = {
         console,
@@ -339,7 +442,23 @@ async function loadSdkTurnstileRunner(
         Date,
         JSON,
         Object,
-        Reflect,
+        Reflect: {
+            ...Reflect,
+            set(target: object, propertyKey: PropertyKey, value: unknown, receiver?: unknown): boolean {
+                if ((typeof target !== "object" && typeof target !== "function") || target == null) {
+                    return true;
+                }
+                const actualReceiver =
+                    (typeof receiver === "object" || typeof receiver === "function") && receiver != null
+                        ? receiver
+                        : target;
+                try {
+                    return Reflect.set(target, propertyKey, value, actualReceiver);
+                } catch {
+                    return true;
+                }
+            },
+        },
         Array,
         Promise,
         String,
@@ -352,12 +471,7 @@ async function loadSdkTurnstileRunner(
         Buffer,
         atob: (value: string) => Buffer.from(value, "base64").toString("latin1"),
         btoa: (value: string) => Buffer.from(value, "latin1").toString("base64"),
-        navigator: {
-            userAgent: env.userAgent,
-            language: env.language,
-            languages: env.languages,
-            hardwareConcurrency: env.hardwareConcurrency,
-        },
+        navigator,
         screen: {
             width: env.screenWidth,
             height: env.screenHeight,
@@ -386,17 +500,21 @@ async function loadSdkTurnstileRunner(
         }),
         location,
         document,
+        localStorage,
+        sessionStorage,
     } as Record<string, unknown>;
 
     const windowRef = {
         ...windowObject,
         location,
         document,
-        navigator: sandbox.navigator,
+        navigator,
         screen: sandbox.screen,
         performance: sandbox.performance,
         crypto: sandbox.crypto,
         requestIdleCallback: sandbox.requestIdleCallback,
+        localStorage,
+        sessionStorage,
         addEventListener: () => undefined,
         postMessage: () => undefined,
     } as Record<string, unknown>;
@@ -461,7 +579,7 @@ class TurnstileVM {
                         clearTimeout(timer);
                         reject(
                             new Error(
-                                `turnstile vm completed without return callback: instructionCount=${this.instructionCount} queueEmpty=true recent=${JSON.stringify(this.trace.slice(-12))} slots=${JSON.stringify(this.dumpSlots([0, 1, 3, 4, 9, 10, 14, 18, 19, 28, 29, 35, 72, 79, 80, 85]))}`,
+                                `turnstile vm completed without return callback: instructionCount=${this.instructionCount} queueEmpty=true recent=${JSON.stringify(this.trace.slice(-12))} slots=${JSON.stringify(this.dumpSlots([0, 1, 3, 4, 9, 10, 14, 18, 19, 28, 29, 35, 72, 79, 80, 85]))} largeSlots=${JSON.stringify(this.dumpLargeStringSlots())}`,
                             ),
                         );
                     }
@@ -509,6 +627,22 @@ class TurnstileVM {
                 this.preview(this.state.get(slotIdValue)),
             ]),
         );
+    }
+
+    private dumpLargeStringSlots(): Array<{ slot: string; length: number; preview: string }> {
+        const result: Array<{ slot: string; length: number; preview: string }> = [];
+        for (const [key, value] of this.state.entries()) {
+            if (typeof value !== "string" || value.length < 80) {
+                continue;
+            }
+            result.push({
+                slot: String(key),
+                length: value.length,
+                preview: value.slice(0, 120),
+            });
+        }
+        result.sort((left, right) => right.length - left.length);
+        return result.slice(0, 12);
     }
 
     private debugLog(message: string, details?: Record<string, unknown>): void {
@@ -873,12 +1007,160 @@ function slotId(value: unknown): number {
     return Number(value);
 }
 
+function createAnyStub(seed: Record<string, unknown> = {}): any {
+    const fn = function stubFn() {
+        return undefined;
+    };
+    Object.assign(fn, seed);
+    return new Proxy(fn, {
+        get(target, prop, receiver) {
+            if (Reflect.has(target, prop)) {
+                return Reflect.get(target, prop, receiver);
+            }
+            if (prop === Symbol.toPrimitive) {
+                return () => "";
+            }
+            if (prop === Symbol.toStringTag) {
+                return "Function";
+            }
+            if (prop === "length") {
+                return 0;
+            }
+            if (prop === "then") {
+                return undefined;
+            }
+            const nested = createAnyStub();
+            Reflect.set(target, prop, nested, target);
+            return nested;
+        },
+        apply() {
+            return undefined;
+        },
+        construct() {
+            return createAnyStub();
+        },
+        set(target, prop, value) {
+            Reflect.set(target, prop, value, target);
+            return true;
+        },
+    });
+}
+
+function createDomStub(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+    const target: Record<string, unknown> = {
+        style: {},
+        children: [] as unknown[],
+        childNodes: [] as unknown[],
+        appendChild(child: unknown) {
+            (this.children as unknown[]).push(child);
+            (this.childNodes as unknown[]).push(child);
+            return child;
+        },
+        removeChild(child: unknown) {
+            const items = this.children as unknown[];
+            const index = items.findIndex((item) => item === child);
+            if (index >= 0) {
+                items.splice(index, 1);
+            }
+            const childNodes = this.childNodes as unknown[];
+            const childNodeIndex = childNodes.findIndex((item) => item === child);
+            if (childNodeIndex >= 0) {
+                childNodes.splice(childNodeIndex, 1);
+            }
+            return child;
+        },
+        setAttribute: () => undefined,
+        getAttribute: () => null,
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
+        postMessage: () => undefined,
+        focus: () => undefined,
+        blur: () => undefined,
+        click: () => undefined,
+        contentWindow: {
+            postMessage: () => undefined,
+        },
+        ...overrides,
+    };
+
+    return createAnyStub(target);
+}
+
+function createStorageStub(): Record<string, unknown> {
+    const entries = new Map<string, string>();
+    return {
+        get length() {
+            return entries.size;
+        },
+        clear() {
+            entries.clear();
+        },
+        getItem(key: string) {
+            return entries.get(String(key)) ?? null;
+        },
+        key(index: number) {
+            return [...entries.keys()][Number(index)] ?? null;
+        },
+        removeItem(key: string) {
+            entries.delete(String(key));
+        },
+        setItem(key: string, value: unknown) {
+            entries.set(String(key), String(value));
+        },
+    };
+}
+
+function createNavigatorObject(env: SentinelEnv): Record<string, unknown> {
+    const plugins = [
+        {
+            name: "PDF Viewer",
+            filename: "internal-pdf-viewer",
+            description: "Portable Document Format",
+        },
+    ];
+    const mimeTypes = [
+        {
+            type: "application/pdf",
+            suffixes: "pdf",
+            description: "Portable Document Format",
+        },
+    ];
+    return {
+        userAgent: env.userAgent,
+        language: env.language,
+        languages: env.languages,
+        hardwareConcurrency: env.hardwareConcurrency,
+        cookieEnabled: true,
+        webdriver: false,
+        plugins,
+        mimeTypes,
+        pdfViewerEnabled: true,
+        platform: "Win32",
+        vendor: "Google Inc.",
+        appCodeName: "Mozilla",
+        appName: "Netscape",
+        appVersion: env.userAgent,
+        product: "Gecko",
+        productSub: "20030107",
+        maxTouchPoints: 0,
+        onLine: true,
+    };
+}
+
 function buildWindowObject(env: SentinelEnv): Record<string, unknown> {
+    const localStorage = createStorageStub();
+    const sessionStorage = createStorageStub();
+    const navigator = createNavigatorObject(env);
     const document = {
         scripts: envScripts(env),
-        documentElement: {
+        head: createDomStub(),
+        body: createDomStub(),
+        documentElement: createDomStub({
             getAttribute: (name: string) => (name === "data-build" ? env.buildHash : null),
-        },
+        }),
+        createElement: () => createDomStub(),
+        addEventListener: () => undefined,
+        removeEventListener: () => undefined,
     };
     const performance = {
         now: () => performanceNow(),
@@ -890,20 +1172,69 @@ function buildWindowObject(env: SentinelEnv): Record<string, unknown> {
 
     const windowObject: Record<string, unknown> = {
         location: {
-            search: buildSearchString(env.searchParamKeys),
+            href: `https://sentinel.openai.com/backend-api/sentinel/frame.html${buildSearchString(env.searchParamKeys, env.buildHash)}`,
+            pathname: "/backend-api/sentinel/frame.html",
+            search: buildSearchString(env.searchParamKeys, env.buildHash),
         },
         document,
-        navigator: {
-            userAgent: env.userAgent,
-            language: env.language,
-            languages: env.languages,
-            hardwareConcurrency: env.hardwareConcurrency,
-        },
+        navigator,
         screen: {
             width: env.screenWidth,
             height: env.screenHeight,
         },
         performance,
+        innerWidth: env.innerWidth,
+        innerHeight: env.innerHeight,
+        outerWidth: env.outerWidth,
+        outerHeight: env.outerHeight,
+        devicePixelRatio: env.devicePixelRatio,
+        origin: "https://sentinel.openai.com",
+        screenX: 0,
+        screenY: 0,
+        screenLeft: 0,
+        screenTop: 0,
+        scrollX: 0,
+        pageXOffset: 0,
+        scrollY: 0,
+        pageYOffset: 0,
+        name: "",
+        navigation: {},
+        history: {
+            length: 1,
+            state: null,
+            back: () => undefined,
+            forward: () => undefined,
+            go: () => undefined,
+            pushState: () => undefined,
+            replaceState: () => undefined,
+        },
+        locationbar: {},
+        menubar: {},
+        personalbar: {},
+        scrollbars: {},
+        statusbar: {},
+        toolbar: {},
+        status: "",
+        closed: false,
+        length: 0,
+        opener: null,
+        frameElement: null,
+        external: {},
+        visualViewport: {
+            width: env.innerWidth,
+            height: env.innerHeight,
+            scale: env.devicePixelRatio,
+        },
+        event: undefined,
+        clientInformation: {
+            userAgent: env.userAgent,
+            language: env.language,
+            languages: env.languages,
+            hardwareConcurrency: env.hardwareConcurrency,
+        },
+        styleMedia: {},
+        localStorage,
+        sessionStorage,
         Date,
         Math,
         JSON,
@@ -938,11 +1269,11 @@ function envScripts(env: SentinelEnv): Array<{ src: string }> {
     return env.scriptSources.map((src) => ({src}));
 }
 
-function buildSearchString(keys: string[]): string {
+function buildSearchString(keys: string[], buildHash?: string): string {
     if (keys.length === 0) {
         return "";
     }
-    return `?${keys.map((key) => `${key}=`).join("&")}`;
+    return `?${keys.map((key) => `${key}=${key === "sv" ? (buildHash ?? "") : ""}`).join("&")}`;
 }
 
 function base64Json(value: unknown): string {
@@ -975,6 +1306,20 @@ function xorCipher(text: string, key: string): string {
     }
     return output;
 }
+
+function tryDecodeBase64Utf8(value: string): string {
+    try {
+        return Buffer.from(String(value), "base64").toString("utf8");
+    } catch {
+        return "";
+    }
+}
+
+function looksLikeEncodedError(value: string): boolean {
+    const text = String(value ?? "");
+    return /^\d+:\s*(TypeError|Error|ReferenceError|SyntaxError)/.test(text);
+}
+
 
 function randomPick<T>(items: T[]): T {
     return items[Math.floor(Math.random() * items.length)];

@@ -1,12 +1,23 @@
 // @ts-nocheck
+import {createRequire} from "node:module";
 import {readFile, writeFile} from "node:fs/promises";
 import path from "node:path";
+import {appConfig} from "../config.js";
 import {generateEmailName} from "./generate-email-name.js";
+
+const require = createRequire(import.meta.url);
+const {
+    ProxyAgent,
+    Agent,
+}: {
+    ProxyAgent: new (options: { uri: string; requestTls?: { rejectUnauthorized?: boolean } }) => unknown;
+    Agent: new (options?: { connect?: { rejectUnauthorized?: boolean } }) => unknown;
+} = require("undici");
 
 const PROXIEDMAIL_BASE_URL = "https://proxiedmail.com/api/v1";
 const PROXIEDMAIL_API_TOKEN = "1f925b5c7a6872b92cc11c56c2c1be6c";
 const PROXIEDMAIL_REAL_ADDRESS = "proxiedmail@kuaileshifu.top";
-const PROXIEDMAIL_DOMAIN = "proxiedmail.com";
+const PROXIEDMAIL_DOMAINS = ["pxdmail.net", "pxdmail.com"];//proxiedmail.com 这个滥用了
 const PROXIEDMAIL_SIGNUP_DOMAIN = "gmail.com";
 const PROXIEDMAIL_SIGNUP_PASSWORD = "zxcv123456789..";
 const PROXIEDMAIL_POLL_ATTEMPTS = 36;
@@ -18,6 +29,25 @@ const lastVerificationCodeByEmail = new Map();
 let currentApiToken = PROXIEDMAIL_API_TOKEN;
 let currentRealAddress = PROXIEDMAIL_REAL_ADDRESS;
 let accountStateLoaded = false;
+
+function buildDispatcher() {
+    const proxyUrl = String(appConfig.defaultProxyUrl ?? "").trim();
+    return proxyUrl
+        ? new ProxyAgent({
+            uri: proxyUrl,
+            requestTls: {rejectUnauthorized: false},
+        })
+        : new Agent({
+            connect: {rejectUnauthorized: false},
+        });
+}
+
+async function proxiedFetch(input, init = {}) {
+    return fetch(input, {
+        ...init,
+        //dispatcher: buildDispatcher(),//使用代理
+    });
+}
 
 async function loadPersistedAccountState() {
     if (accountStateLoaded) {
@@ -66,12 +96,13 @@ function buildHeaders(apiToken = currentApiToken) {
 }
 
 function buildProxyAddress() {
-    return `${generateEmailName()}@${PROXIEDMAIL_DOMAIN}`;
+    const domain = PROXIEDMAIL_DOMAINS[Math.floor(Math.random() * PROXIEDMAIL_DOMAINS.length)];
+    return `${generateEmailName()}@${domain}`;
 }
 
 async function requestJSON(path, options = {}) {
     await loadPersistedAccountState();
-    const response = await fetch(`${PROXIEDMAIL_BASE_URL}${path}`, {
+    const response = await proxiedFetch(`${PROXIEDMAIL_BASE_URL}${path}`, {
         ...options,
         headers: options.headers ?? buildHeaders(),
     });
@@ -149,7 +180,7 @@ function buildSignupUsername() {
 
 async function registerProxiedMailAccount() {
     const username = buildSignupUsername();
-    const response = await fetch(`${PROXIEDMAIL_BASE_URL}/users`, {
+    const response = await proxiedFetch(`${PROXIEDMAIL_BASE_URL}/users`, {
         method: "POST",
         headers: buildBrowserLikeHeaders({
             Referer: "https://proxiedmail.com/en/signup",
@@ -163,6 +194,7 @@ async function registerProxiedMailAccount() {
                     password: PROXIEDMAIL_SIGNUP_PASSWORD,
                     wasAuthenticated: "",
                     keyLandingPage: "",
+                    v: "zalupavvvvvvvggggzalupa0000000000000gggggg",
                 },
             },
         }),
@@ -186,7 +218,7 @@ async function registerProxiedMailAccount() {
 }
 
 async function exchangeApiToken(accessToken) {
-    const response = await fetch(`${PROXIEDMAIL_BASE_URL}/api-token`, {
+    const response = await proxiedFetch(`${PROXIEDMAIL_BASE_URL}/api-token`, {
         method: "GET",
         headers: buildBrowserLikeHeaders({
             Authorization: `Bearer ${accessToken}`,
@@ -393,7 +425,7 @@ export function createProxiedMailProvider() {
                 });
                 if (message?.verificationCode) {
                     lastVerificationCodeByEmail.set(normalizedEmail, message.verificationCode);
-                    console.log(`emailOtpCode: ${message.verificationCode}`);
+                    console.log(`proxiedmailOtpCode: ${message.verificationCode}`);
                     return message.verificationCode;
                 }
 

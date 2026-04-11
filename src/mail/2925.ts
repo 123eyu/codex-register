@@ -659,7 +659,7 @@ export function create2925Provider() {
                 const result = await fetchLatestVerificationCodeWithSession(email);
 
                 if (result.code) {
-                    console.log(`emailOtpCode: ${result.code}`);
+                    console.log(`2925OtpCode: ${result.code}`);
                     console.log(
                         `autoEmailOtpDeletedCount: ${result.deleteResult?.count ?? 0}`,
                     );

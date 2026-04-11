@@ -221,7 +221,7 @@ export function createGmailProvider() {
                     const previousCode =
                         lastVerificationCodeByEmail.get(normalizedEmail) ?? "";
                     if (previousCode && message.verificationCode === previousCode) {
-                        console.log(`emailOtpCode: ${message.verificationCode}`);
+                        console.log(`gmailOtpCode: ${message.verificationCode}`);
                         if (attempt < GMAIL_POLL_ATTEMPTS) {
                             await new Promise((resolve) =>
                                 setTimeout(resolve, GMAIL_POLL_INTERVAL_MS),
@@ -232,7 +232,7 @@ export function createGmailProvider() {
 
                     await deleteMessage(message.id);
                     lastVerificationCodeByEmail.set(normalizedEmail, message.verificationCode);
-                    console.log(`emailOtpCode: ${message.verificationCode}`);
+                    console.log(`gmailOtpCode: ${message.verificationCode}`);
                     return message.verificationCode;
                 }
 

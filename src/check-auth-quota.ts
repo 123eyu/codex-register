@@ -295,12 +295,15 @@ function normalizeRefreshedAuthRecord(existing: AuthRecord, payload: OAuthTokenR
     };
 }
 
-async function refreshAccessToken(record: AuthRecord): Promise<{ record?: AuthRecord; error?: string }> {
+async function refreshAccessToken(
+    record: AuthRecord,
+): Promise<{ record?: AuthRecord; error?: string; status?: number }> {
     if (!record.refresh_token) {
         return {error: "缺少 refresh_token"};
     }
 
     let lastError = "";
+    let lastStatus = 0;
     for (const tokenURL of AUTH_OAUTH_TOKEN_URLS) {
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort("timeout"), REQUEST_TIMEOUT_MS);
@@ -323,6 +326,7 @@ async function refreshAccessToken(record: AuthRecord): Promise<{ record?: AuthRe
 
             const rawBody = await response.text();
             if (!response.ok) {
+                lastStatus = response.status;
                 lastError = extractMessage(rawBody);
                 continue;
             }
@@ -343,7 +347,7 @@ async function refreshAccessToken(record: AuthRecord): Promise<{ record?: AuthRe
         }
     }
 
-    return {error: lastError || "refresh 失败"};
+    return {error: lastError || "refresh 失败", status: lastStatus || undefined};
 }
 
 async function saveAuthRecord(filePath: string, record: AuthRecord): Promise<void> {
@@ -475,43 +479,66 @@ async function summarizeAuth(filePath: string): Promise<AuthSummary> {
     let message = extractMessage(probe.body);
 
     if (probe.status === 401) {
-        const refreshed = await refreshAccessToken(record);
-        if (refreshed.record) {
-            record = refreshed.record;
-            await saveAuthRecord(filePath, record);
-            probe = await sendUsageProbe(record.access_token ?? "", record.account_id?.trim() || "");
-            message = extractMessage(probe.body);
+        if (shouldMoveTo401(message)) {
+            try {
+                movedTo401 = await moveTo401Dir(filePath);
+            } catch (error) {
+                const moveMessage = error instanceof Error ? error.message : String(error);
+                return {
+                    file: maskPath(filePath),
+                    email,
+                    plan: localPlan,
+                    status: "http_401",
+                    ok: false,
+                    used: "-",
+                    remaining: "-",
+                    reset: "-",
+                    limitReached: "-",
+                    expires: record.expired?.trim() || "-",
+                    note: `移动401目录失败: ${truncate(moveMessage, 40)}`,
+                    rawStatus: probe.status,
+                    rawBody: probe.body,
+                    movedTo401: false,
+                };
+            }
         } else {
-            message = refreshed.error || message;
+            const refreshed = await refreshAccessToken(record);
+            if (refreshed.record) {
+                record = refreshed.record;
+                await saveAuthRecord(filePath, record);
+                probe = await sendUsageProbe(record.access_token ?? "", record.account_id?.trim() || "");
+                message = extractMessage(probe.body);
+            } else {
+                message = refreshed.error || message;
+                if (refreshed.status === 401) {
+                    try {
+                        movedTo401 = await moveTo401Dir(filePath);
+                    } catch (error) {
+                        const moveMessage = error instanceof Error ? error.message : String(error);
+                        return {
+                            file: maskPath(filePath),
+                            email,
+                            plan: localPlan,
+                            status: "http_401",
+                            ok: false,
+                            used: "-",
+                            remaining: "-",
+                            reset: "-",
+                            limitReached: "-",
+                            expires: record.expired?.trim() || "-",
+                            note: `移动401目录失败: ${truncate(moveMessage, 40)}`,
+                            rawStatus: probe.status,
+                            rawBody: probe.body,
+                            movedTo401: false,
+                        };
+                    }
+                }
+            }
         }
     }
 
     const payload = parseJson<UsagePayload>(probe.body);
     const primary = payload?.rate_limit?.primary_window;
-
-    if (probe.status === 401 && shouldMoveTo401(message)) {
-        try {
-            movedTo401 = await moveTo401Dir(filePath);
-        } catch (error) {
-            const moveMessage = error instanceof Error ? error.message : String(error);
-            return {
-                file: maskPath(filePath),
-                email,
-                plan: payload?.plan_type?.trim() || localPlan,
-                status: "http_401",
-                ok: false,
-                used: "-",
-                remaining: "-",
-                reset: "-",
-                limitReached: "-",
-                expires: record.expired?.trim() || "-",
-                note: `移动401目录失败: ${truncate(moveMessage, 40)}`,
-                rawStatus: probe.status,
-                rawBody: probe.body,
-                movedTo401: false,
-            };
-        }
-    }
     const note =
         probe.status === 200
             ? "请求成功"

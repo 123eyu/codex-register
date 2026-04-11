@@ -1,10 +1,10 @@
 # <p align="center">codex-register</p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-v1.0.0-111827">
+  <img alt="Version" src="https://img.shields.io/badge/version-v1.0.2-111827">
   <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/klsf/codex-register?style=social">
 </p>
-用于批量注册 OpenAI 账号、登录生成 `auth` 授权文件，以及批量检查 `auth` 目录下凭证剩余可用额度。
+用于批量注册 OpenAI 账号、授权Codex登录生成授权文件，可直接导入cliproxyapi使用，以及批量检查凭证剩余可用额度。
 
 ## 免责声明
 
@@ -40,26 +40,26 @@ npm install
   "defaultProxyUrl": "http://127.0.0.1:10808",
   "defaultPassword": "kuaileshifu88",
   "loopDelayMs": 120000,
-  "failureDelayMs": 120000,
   "gmailAccessToken": "",
   "gmailEmailAddress": "",
   "2925EmailAddress": "",
-  "2925Password": ""
+  "2925Password": "",
+  "cloudflareEmailDomain": "",
+  "cloudflareApiBaseUrl": "",
+  "cloudflareApiKey": ""
 }
 ```
 
 配置项说明：
 
 - `provider`
-    - 当前验证码邮箱提供方，可选：`proxiedmail`、`gmail`、`2925`
+    - 当前验证码邮箱提供方，可选：`proxiedmail`、`gmail`、`2925`、`cloudflare`
 - `defaultProxyUrl`
     - 默认代理地址，主注册流程和额度检查都会使用
 - `defaultPassword`
     - OpenAI 注册默认密码
 - `loopDelayMs`
     - 自动循环模式下，每轮成功后的等待毫秒数
-- `failureDelayMs`
-    - 自动循环模式下，每轮失败后的等待毫秒数
 - `gmailAccessToken`
     - Gmail API access token
 - `gmailEmailAddress`
@@ -68,6 +68,12 @@ npm install
     - 2925 邮箱登录账号
 - `2925Password`
     - 2925 邮箱登录密码
+- `cloudflareEmailDomain`
+    - Cloudflare Email Routing 使用的邮箱域名，例如 `54782.xyz`
+- `cloudflareApiBaseUrl`
+    - Cloudflare 邮件 Worker 地址，例如 `https://mail-d1-api.xxx.workers.dev`
+- `cloudflareApiKey`
+    - Cloudflare 邮件 Worker 的 `x-api-key`
 
 说明：
 
@@ -77,7 +83,7 @@ npm install
 
 ### Provider 说明
 
-项目支持 3 种验证码邮箱提供方：
+项目支持 4 种验证码邮箱提供方：
 
 - `proxiedmail`
     - 通过 ProxiedMail 动态创建代理邮箱收验证码
@@ -92,6 +98,12 @@ npm install
     - 通过 2925 邮箱账号登录后读取验证码邮件
     - 需要在 `config.json` 中配置 `2925EmailAddress` 和 `2925Password`
     - 每个2925账号好像最多创建20个子账号，超过20个后就收不到验证码了。
+
+- `cloudflare`
+    - 通过 Cloudflare Email Routing + Worker + D1 读取验证码邮件
+    - 需要在 `config.json` 中配置 `cloudflareEmailDomain`、`cloudflareApiBaseUrl`、`cloudflareApiKey`
+    - 程序会自动生成 `随机名@你的域名`，再调用 Cloudflare Worker 的 `/latest` 和 `/emails` 接口轮询验证码
+    - Worker 部署教程见 [`MAIL_WORKER_DEPLOY.md`](/H:/go/codex-register/MAIL_WORKER_DEPLOY.md)
 
 开发模式运行：
 
@@ -125,15 +137,16 @@ npm run dev -- [参数]
 
 - `--email <邮箱>`
     - 指定邮箱后，只执行单轮。
-    - 指定后会自动进入手动验证码模式，效果等同于同时带上 `--otp`。
     - 不带 `--auth` 时：执行注册 + 登录获取授权。
     - 带 `--auth` 时：只执行登录获取授权。
 - `--otp`
-    - 手动输入邮箱验证码。
+    - 手动输入邮箱验证码；不带时会优先使用当前 provider 自动读取验证码。
 - `--auth`
     - 仅登录模式，必须和 `--email` 一起使用。
 - `--st`
     - Sentinel 使用浏览器模式获取 token；不加时走本地计算逻辑。
+- `--n <轮数>`
+    - 仅自动模式有效，限制最多执行多少轮。
 
 使用示例：
 
@@ -141,17 +154,20 @@ npm run dev -- [参数]
 # 自动循环注册
 npm run dev
 
+# 自动模式只跑 1 轮
+npm run dev -- --n 1
+
+# 指定邮箱，自动读取验证码
+npm run dev -- --email zxkl12345_test@2925.com
+
 # 指定邮箱，手动输入验证码
 npm run dev -- --email zxkl12345_test@2925.com --otp
 
-# 指定邮箱，省略 --otp 也会自动进入手动验证码模式
-npm run dev -- --email zxkl12345_test@2925.com
-
-# 指定邮箱，只做登录授权
-npm run dev -- --email zxkl12345_test@2925.com --auth --otp
-
-# 指定邮箱，只做登录授权；省略 --otp 也会自动进入手动验证码模式
+# 指定邮箱，只做登录授权并自动读取验证码
 npm run dev -- --email zxkl12345_test@2925.com --auth
+
+# 指定邮箱，只做登录授权并手动输入验证码
+npm run dev -- --email zxkl12345_test@2925.com --auth --otp
 
 # 指定邮箱，并启用浏览器 Sentinel
 npm run dev -- --email zxkl12345_test@2925.com --st
@@ -160,9 +176,9 @@ npm run dev -- --email zxkl12345_test@2925.com --st
 说明：
 
 - 默认密码来自 `config.json` 的 `defaultPassword`
-- 只要使用 `--email`，程序就会自动切到手动验证码模式
-- 显式传 `--otp` 也仍然有效
-- 自动模式下，成功后会等待 `config.json.loopDelayMs` 再进入下一轮；失败后会额外等待 `config.json.failureDelayMs` 再重试
+- 指定 `--email` 只表示使用这个邮箱，不再强制进入手动验证码模式
+- 只有显式传 `--otp` 才会手动输入验证码
+- 自动模式下，成功后会等待 `config.json.loopDelayMs` 再进入下一轮
 
 ### 2. `npm run register:batch`
 
@@ -281,13 +297,6 @@ npm run build
 npm run start -- --email zxkl12345_test@2925.com --auth --otp
 ```
 
-## 参数风格说明
-
-项目里的命令参数已经统一为双横线写法：
-
-- 正确：`--email`、`--otp`、`--auth`、`--st`
-- 不再使用：`-email`、`-otp`、`-auth`、`-st`
-
 ## 常见场景
 
 切换验证码邮箱 provider：
@@ -315,6 +324,17 @@ npm run start -- --email zxkl12345_test@2925.com --auth --otp
   "provider": "2925",
   "2925EmailAddress": "your_2925@2925.com",
   "2925Password": "your_2925_password"
+}
+```
+
+使用 Cloudflare 邮箱收验证码：
+
+```json
+{
+  "provider": "cloudflare",
+  "cloudflareEmailDomain": "54782.xyz",
+  "cloudflareApiBaseUrl": "https://mail-d1-api.xxx.workers.dev",
+  "cloudflareApiKey": "your_api_key"
 }
 ```
 

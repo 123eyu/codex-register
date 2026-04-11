@@ -1,12 +1,14 @@
 import {existsSync} from "node:fs";
-import {chromium, type Browser, type Page} from "playwright-core";
+import {chromium, type Browser, type BrowserContext, type Page} from "playwright-core";
+import {appConfig} from "./config.js";
 
 const SENTINEL_FRAME_URL = "https://sentinel.openai.com/backend-api/sentinel/frame.html?sv=20260219f9f6";
 const SENTINEL_COOKIE_DOMAIN = "sentinel.openai.com";
-const SENTINEL_COOKIE_URL = "https://sentinel.openai.com/";
 const SENTINEL_SCRIPT_READY_TIMEOUT_MS = 20000;
+const SENTINEL_VIEWPORT = {width: 1280, height: 720};
 
 let browserPromise: Promise<Browser> | null = null;
+let contextPromise: Promise<BrowserContext> | null = null;
 let pagePromise: Promise<Page> | null = null;
 
 declare global {
@@ -38,24 +40,39 @@ async function getBrowser(): Promise<Browser> {
         browserPromise = chromium.launch({
             headless: true,
             executablePath: resolveBrowserExecutablePath(),
+            proxy: appConfig.defaultProxyUrl
+                ? {
+                    server: appConfig.defaultProxyUrl,
+                }
+                : undefined,
         });
     }
     return browserPromise;
 }
 
-async function getSentinelPage(): Promise<Page> {
+async function getContext(userAgent?: string): Promise<BrowserContext> {
+    if (!contextPromise) {
+        contextPromise = (async () => {
+            const browser = await getBrowser();
+            return browser.newContext({
+                viewport: SENTINEL_VIEWPORT,
+                deviceScaleFactor: 1,
+                locale: "zh-CN",
+                userAgent: userAgent?.trim() || undefined,
+            });
+        })().catch((error) => {
+            contextPromise = null;
+            throw error;
+        });
+    }
+    return contextPromise;
+}
+
+async function getSentinelPage(userAgent?: string): Promise<Page> {
     if (!pagePromise) {
         pagePromise = (async () => {
-            const browser = await getBrowser();
-            const page = await browser.newPage();
-            await page.goto(SENTINEL_FRAME_URL, {
-                waitUntil: "domcontentloaded",
-                timeout: SENTINEL_SCRIPT_READY_TIMEOUT_MS,
-            });
-            await page.waitForFunction(() => {
-                return typeof window.SentinelSDK?.token === "function";
-            }, {timeout: SENTINEL_SCRIPT_READY_TIMEOUT_MS});
-            return page;
+            const context = await getContext(userAgent);
+            return context.newPage();
         })().catch((error) => {
             pagePromise = null;
             throw error;
@@ -79,19 +96,28 @@ async function ensureDeviceCookie(page: Page, deviceID: string): Promise<void> {
     ]);
 }
 
-export async function fetchSentinelTokenFromBrowser(
-    flow: string,
-    deviceID: string,
-): Promise<string> {
-    const page = await getSentinelPage();
-    await ensureDeviceCookie(page, deviceID);
+async function loadSentinelFrame(page: Page): Promise<void> {
     await page.goto(SENTINEL_FRAME_URL, {
+        waitUntil: "domcontentloaded",
+        timeout: SENTINEL_SCRIPT_READY_TIMEOUT_MS,
+    });
+    await page.reload({
         waitUntil: "domcontentloaded",
         timeout: SENTINEL_SCRIPT_READY_TIMEOUT_MS,
     });
     await page.waitForFunction(() => {
         return typeof window.SentinelSDK?.token === "function";
     }, {timeout: SENTINEL_SCRIPT_READY_TIMEOUT_MS});
+}
+
+export async function fetchSentinelTokenFromBrowser(
+    flow: string,
+    deviceID: string,
+    userAgent?: string,
+): Promise<string> {
+    const page = await getSentinelPage(userAgent);
+    await ensureDeviceCookie(page, deviceID);
+    await loadSentinelFrame(page);
 
     const result = await page.evaluate(async ({runtimeFlow}) => {
         if (typeof window.SentinelSDK?.token !== "function") {

@@ -1,21 +1,5 @@
 // @ts-nocheck
 const RECENT_LOCAL_PARTS = new Set();
-let localCounter = 0;
-
-function randomLowercaseString(minLength, maxLength = minLength) {
-  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-  const size =
-    minLength === maxLength
-      ? minLength
-      : Math.floor(Math.random() * (maxLength - minLength + 1)) + minLength;
-  let result = "";
-
-  for (let i = 0; i < size; i += 1) {
-    result += chars[Math.floor(Math.random() * chars.length)];
-  }
-
-  return result;
-}
 
 function randomPick(items) {
   return items[Math.floor(Math.random() * items.length)];
@@ -29,14 +13,6 @@ function maybe(value, probability = 0.5) {
   return Math.random() < probability ? value : "";
 }
 
-function nextEntropyToken() {
-  localCounter = (localCounter + 1) % 1679616;
-  const timePart = Date.now().toString(36).slice(-4);
-  const counterPart = localCounter.toString(36).padStart(2, "0");
-  const randomPart = randomLowercaseString(2, 3);
-  return `${timePart}${counterPart}${randomPart}`;
-}
-
 function normalizeLocalPart(value) {
   return String(value)
     .toLowerCase()
@@ -45,24 +21,74 @@ function normalizeLocalPart(value) {
     .replace(/^[._-]+|[._-]+$/g, "");
 }
 
-function finalizeLocalPart(baseValue) {
-  let base = normalizeLocalPart(baseValue);
-  if (base.length < 5) {
-    base += randomLowercaseString(2, 4);
+function pad2(value) {
+  return String(value).padStart(2, "0");
+}
+
+function randomYearSuffix() {
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const year = randomInt(currentYear - 16, currentYear - 2);
+  return String(year).slice(-2);
+}
+
+function randomMonthDay() {
+  return `${pad2(randomInt(1, 12))}${pad2(randomInt(1, 28))}`;
+}
+
+function randomNaturalNumber() {
+  const pool = [
+    randomYearSuffix(),
+    randomMonthDay(),
+    `${randomInt(12, 99)}`,
+    `${randomInt(100, 999)}`,
+  ];
+  return randomPick(pool);
+}
+
+function randomShortWord() {
+  const words = [
+    "blue", "bright", "clear", "cozy", "daily", "green", "happy", "mellow",
+    "mint", "north", "quiet", "river", "solar", "sunny", "urban", "west",
+  ];
+  return randomPick(words);
+}
+
+function applyNaturalSuffix(base) {
+  const normalizedBase = normalizeLocalPart(base);
+  if (!normalizedBase) {
+    return "";
   }
 
-  const entropy = nextEntropyToken();
-  const separator = /[a-z0-9]$/.test(base) ? randomPick(["", "_", "-"]) : "";
-  const maxBaseLength = 30 - entropy.length - separator.length;
-  base = base.slice(0, Math.max(8, maxBaseLength)).replace(/[._-]+$/g, "");
+  if (/\d{2,}$/.test(normalizedBase)) {
+    return normalizedBase;
+  }
 
-  let candidate = `${base}${separator}${entropy}`;
+  const shouldAddNumber = normalizedBase.length < 8 || Math.random() < 0.72;
+  if (!shouldAddNumber) {
+    return normalizedBase;
+  }
+
+  const separator = Math.random() < 0.35 ? randomPick(["", ".", "_"]) : "";
+  return normalizeLocalPart(`${normalizedBase}${separator}${randomNaturalNumber()}`);
+}
+
+function finalizeLocalPart(baseValue) {
+  const normalizedBase = normalizeLocalPart(baseValue).slice(0, 28);
+  let candidate = applyNaturalSuffix(normalizedBase) || normalizedBase;
   candidate = normalizeLocalPart(candidate).slice(0, 30).replace(/[._-]+$/g, "");
 
+  let attempt = 0;
   while (!candidate || RECENT_LOCAL_PARTS.has(candidate)) {
-    const extraEntropy = nextEntropyToken().slice(-4);
-    const trimmedBase = base.slice(0, Math.max(5, 30 - extraEntropy.length - 1)).replace(/[._-]+$/g, "");
-    candidate = `${trimmedBase}_${extraEntropy}`.slice(0, 30).replace(/[._-]+$/g, "");
+    attempt += 1;
+    const fallbackNumber =
+      attempt <= 2
+        ? randomNaturalNumber()
+        : `${randomNaturalNumber()}${randomInt(0, 9)}`;
+    const separator = randomPick(["", ".", "_"]);
+    candidate = normalizeLocalPart(`${normalizedBase}${separator}${fallbackNumber}`)
+      .slice(0, 30)
+      .replace(/[._-]+$/g, "");
   }
 
   RECENT_LOCAL_PARTS.add(candidate);
@@ -74,61 +100,58 @@ function finalizeLocalPart(baseValue) {
 }
 
 export function generateEmailName() {
-  const names = [
-    "alex", "sam", "leo", "mia", "nina", "luca", "ivan", "emma",
-    "noah", "zoe", "adam", "lily", "dylan", "lucy", "mason", "ella",
-    "ruby", "owen", "chloe", "ethan", "ava", "liam", "aria", "logan",
-    "grace", "nolan", "stella", "isaac", "hannah", "caleb", "scarlett", "jack",
-    "elena", "ryan", "hazel", "carter", "bella", "asher", "julia", "wyatt",
-    "sophie", "julian", "nora", "hudson", "violet", "ian", "claire", "ezra",
-    "naomi", "kai", "alice", "jude", "layla", "theo", "lucas", "maya",
+  const firstNames = [
+    "alex", "andrew", "anna", "ava", "bella", "brandon", "caleb", "chloe",
+    "claire", "daniel", "david", "dylan", "ella", "emily", "emma", "ethan",
+    "eva", "grace", "hannah", "harry", "isabella", "jack", "jacob", "james",
+    "jason", "julia", "karen", "kevin", "lauren", "leo", "lily", "lucas",
+    "lucy", "madison", "mark", "mason", "mia", "michael", "natalie", "nathan",
+    "nicholas", "nicole", "noah", "olivia", "owen", "ryan", "sam", "sarah",
+    "sophia", "stella", "thomas", "victoria", "william", "zoe",
   ];
-  const surnames = [
-    "cole", "stone", "hart", "reed", "blake", "frost", "wells", "ross",
-    "bennett", "turner", "hayes", "parker", "miles", "lane", "brooks", "evans",
-    "cooper", "morgan", "griffin", "watson", "porter", "hughes", "tucker", "bishop",
-    "sanders", "pearson", "carter", "murphy", "sullivan", "fisher", "bailey", "howard",
-    "spencer", "webb", "holland", "palmer", "gibson", "mason", "perry", "harrison",
-    "harper", "west", "woods", "kennedy", "fletcher", "carson", "simmons", "walsh",
+  const lastNames = [
+    "adams", "allen", "anderson", "bailey", "baker", "bell", "bennett", "brooks",
+    "brown", "carter", "clark", "cole", "cooper", "davis", "edwards", "evans",
+    "fisher", "garcia", "gray", "green", "griffin", "hall", "harris", "hayes",
+    "hill", "howard", "hughes", "jackson", "johnson", "kennedy", "king", "lee",
+    "lewis", "martin", "miller", "mitchell", "moore", "morgan", "nelson", "parker",
+    "perry", "reed", "richardson", "rivera", "roberts", "robinson", "ross", "scott",
+    "smith", "stone", "taylor", "turner", "walker", "ward", "watson", "white",
+    "wilson", "wood", "wright", "young",
   ];
-  const adjectives = [
-    "quiet", "silver", "midnight", "lucky", "tiny", "sunny", "blue", "urban",
-    "golden", "wild", "dusty", "frozen", "velvet", "rapid", "brave", "gentle",
-    "soft", "bright", "calm", "cool", "mellow", "clever", "happy", "fancy",
-    "cosmic", "crystal", "electric", "gold", "icy", "jolly", "kind", "lazy",
-    "magic", "neon", "noble", "polar", "quick", "rainy", "smart", "smooth",
-    "stellar", "sunset", "super", "vivid", "warm", "young", "zesty", "chill",
-    "glossy", "misty", "pearl", "rusty", "shiny", "silent", "sleepy", "vintage",
+  const commonWords = [
+    "amber", "autumn", "brook", "cindy", "daisy", "ella", "garden", "harbor",
+    "isla", "jenny", "kelly", "linda", "marina", "megan", "nina", "olive",
+    "pearl", "rachel", "ruby", "sandy", "tina", "violet", "wendy",
   ];
-  const nouns = [
-    "raven", "fox", "tiger", "river", "forest", "rocket", "pixel", "vibe",
-    "dream", "echo", "cloud", "stone", "falcon", "nova", "comet", "wave",
-    "maple", "meadow", "brook", "sky", "owl", "otter", "sparrow", "breeze",
-    "harbor", "canyon", "orbit", "anchor", "marble", "ember", "lotus", "dawn",
-    "dusk", "phoenix", "orbit", "planet", "garden", "studio", "valley", "bridge",
-    "signal", "magnet", "planet", "orbit", "banner", "cabin", "circle", "delta",
-    "feather", "glow", "horizon", "island", "jungle", "kitten", "lantern", "mirror",
-    "oasis", "pebble", "rain", "summit", "temple", "voyage", "willow", "zenith",
-  ];
-  const suffixWords = [
-    "lab", "box", "hub", "zone", "home", "spot", "works", "studio",
-    "base", "corner", "point", "space", "desk", "field", "room", "place",
-    "world", "garden", "garage", "house", "nest", "path", "story", "view",
-    "club", "line", "port", "station", "market", "camp", "park", "circle",
-  ];
-  const separators = ["", "", "", "_", "-"];
-  const currentYearTail = `${new Date().getFullYear()}`.slice(-2);
+  const separators = ["", "", ".", "_"];
+  const first = randomPick(firstNames);
+  const last = randomPick(lastNames);
+  const secondLast = randomPick(lastNames.filter((item) => item !== last));
+  const middleInitial = maybe(String.fromCharCode(randomInt(97, 122)), 0.18);
+  const separator = randomPick(separators);
+  const alternateSeparator = randomPick(["", ".", "_"]);
+  const firstInitial = first[0];
+  const lastInitial = last[0];
+  const yearSuffix = randomYearSuffix();
+  const monthDay = randomMonthDay();
 
   const builders = [
-    () => `${randomPick(names)}${randomPick(separators)}${randomPick(surnames)}`,
-    () => `${randomPick(names)}${maybe(randomPick(separators) + randomPick(nouns), 0.7)}`,
-    () => `${randomPick(adjectives)}${randomPick(separators)}${randomPick(nouns)}`,
-    () => `${randomPick(nouns)}${randomPick(separators)}${randomPick(suffixWords)}`,
-    () => `${randomPick(names)}${randomPick(separators)}${randomPick(adjectives)}${maybe(randomPick([currentYearTail, `${randomInt(7, 98)}`]), 0.5)}`,
-    () => `${randomPick(names)}${maybe(randomPick([".", "_", "-"]) + randomPick(surnames), 0.6)}${maybe(`${randomInt(10, 999)}`, 0.4)}`,
-    () => `${randomPick(adjectives)}${randomPick(nouns)}${maybe(`${randomInt(1, 99)}`, 0.35)}`,
-    () => `${randomPick(names)}${randomPick(separators)}${randomPick(surnames)}${randomPick(separators)}${randomPick(nouns)}`,
-    () => `${randomPick(adjectives)}${randomPick(separators)}${randomPick(names)}${randomPick(separators)}${randomPick(suffixWords)}`,
+    () => `${first}${separator}${last}`,
+    () => `${first}${separator}${last}${maybe(yearSuffix, 0.62)}`,
+    () => `${first}${separator}${last}${maybe(monthDay, 0.28)}`,
+    () => `${firstInitial}${separator}${last}`,
+    () => `${first}${separator}${lastInitial}`,
+    () => `${last}${separator}${first}`,
+    () => `${first}${alternateSeparator}${middleInitial}${middleInitial ? alternateSeparator : ""}${last}`,
+    () => `${first}${maybe(alternateSeparator + randomPick(commonWords), 0.35)}`,
+    () => `${randomPick(commonWords)}${separator}${last}${maybe(randomYearSuffix(), 0.55)}`,
+    () => `${first}${separator}${last}${alternateSeparator}${randomInt(12, 99)}`,
+    () => `${first}.${lastInitial}${maybe(yearSuffix, 0.45)}`,
+    () => `${firstInitial}${last}${maybe(yearSuffix, 0.48)}`,
+    () => `${first}${separator}${secondLast}${maybe(yearSuffix, 0.35)}`,
+    () => `${first}${alternateSeparator}${randomShortWord()}`,
+    () => `${randomPick(commonWords)}${separator}${first}${maybe(yearSuffix, 0.42)}`,
   ];
 
   return finalizeLocalPart(randomPick(builders)());

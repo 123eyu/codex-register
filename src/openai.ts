@@ -233,7 +233,6 @@ export class OpenAIClient {
         const totalSteps = 6;
         this.logProgress(1, totalSteps, "打开登录授权页");
         const oauthUrl = this.prepareManualLogin();
-
         const oauthResp = await this.fetch(oauthUrl, {
             redirect: "follow",
             headers: {
@@ -244,13 +243,34 @@ export class OpenAIClient {
         if (!oauthResp.ok) {
             throw new Error(`OauthUrl请求失败: ${oauthResp.status}`);
         }
-        if (oauthResp.url !== `${AUTH_BASE_URL}/log-in`) {
+        if (oauthResp.url.startsWith(DEFAULT_REDIRECT_URI)) {
+            const result = this.extractAuthResult(oauthResp.url);
+            const authRecord = await this.exchangeCodeForToken(result.code);
+            const authPath = await this.saveAuthRecord(authRecord);
+            result.authFile = authPath;
+            return result;
+        }
+        if (
+            oauthResp.url !== `${AUTH_BASE_URL}/log-in` &&
+            oauthResp.url !== `${AUTH_BASE_URL}/sign-in-with-chatgpt/codex/consent`
+        ) {
             throw new Error(`OauthUrl重定向到错误的URL: ${oauthResp.url}`);
         }
 
         this.deviceID = await this.readCookie("https://openai.com", "oai-did");
         if (!this.deviceID) {
             throw new Error("OauthUrl未返回oai-did cookie");
+        }
+
+        if (oauthResp.url === `${AUTH_BASE_URL}/sign-in-with-chatgpt/codex/consent`) {
+            this.logProgress(5, totalSteps, "选择工作区");
+            const continueURL = await this.selectWorkspace(oauthResp.url);
+            this.logProgress(6, totalSteps, "交换授权并保存凭证");
+            const result = await this.followOAuthRedirects(continueURL);
+            const authRecord = await this.exchangeCodeForToken(result.code);
+            const authPath = await this.saveAuthRecord(authRecord);
+            result.authFile = authPath;
+            return result;
         }
 
         this.logProgress(2, totalSteps, "提交登录邮箱");
@@ -320,7 +340,7 @@ export class OpenAIClient {
         return continueURL;
     }
 
-    prepareManualLogin(): string {
+    prepareManualLogin(prompt: "login" | "none" = "login"): string {
         this.state = randomUrlSafeString(24);
         this.codeVerifier = randomUrlSafeString(64);
         const query = new URLSearchParams({
@@ -331,7 +351,7 @@ export class OpenAIClient {
             state: this.state,
             code_challenge: pkceCodeChallenge(this.codeVerifier),
             code_challenge_method: "S256",
-            prompt: "login",
+            prompt,
             id_token_add_organizations: "true",
             codex_cli_simplified_flow: "true",
         });
@@ -519,11 +539,18 @@ export class OpenAIClient {
             const location = response.headers.get("location");
             if (location) {
                 const nextURL = new URL(location, currentURL).toString();
+                if (nextURL.startsWith(`${AUTH_BASE_URL}/add-phone`)) {
+                    throw new Error("当前账号在登录后触发了 add-phone 绑手机流程，无法直接完成授权");
+                }
                 if (nextURL.startsWith(DEFAULT_REDIRECT_URI)) {
                     return this.extractAuthResult(nextURL);
                 }
                 currentURL = nextURL;
                 continue;
+            }
+
+            if (response.url.startsWith(`${AUTH_BASE_URL}/add-phone`)) {
+                throw new Error("当前账号在登录后触发了 add-phone 绑手机流程，无法直接完成授权");
             }
 
             if (response.url.startsWith(DEFAULT_REDIRECT_URI)) {
@@ -807,7 +834,7 @@ export class OpenAIClient {
             "Adams",
             "Turner",
         ];
-        const age = this.randomInt(21, 38);
+        const age = this.randomInt(25, 34);
         const today = new Date();
         const birthYear = today.getFullYear() - age;
         const birthMonth = this.randomInt(1, 12);
@@ -980,6 +1007,7 @@ export class OpenAIClient {
                 console.log(
                     `[网络重试 ${attempt}/${FETCH_RETRY_COUNT}] ${this.describeRetryTarget(input)} ${this.describeRetryError(error)}`,
                 );
+                console.log(`[延迟] 网络重试等待 ${FETCH_RETRY_DELAY_MS * attempt}ms`);
                 await sleep(FETCH_RETRY_DELAY_MS * attempt);
             }
         }

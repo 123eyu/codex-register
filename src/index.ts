@@ -14,9 +14,18 @@ function hasFlag(flag: string): boolean {
     return process.argv.includes(flag);
 }
 
+function readNumberArg(flag: string): number | null {
+    const raw = readArgValue(flag).trim();
+    if (!raw) {
+        return null;
+    }
+    const value = Number.parseInt(raw, 10);
+    return Number.isFinite(value) && value > 0 ? value : null;
+}
+
 async function runOnce(): Promise<void> {
     const email = readArgValue("--email").trim();
-    const manualOtp = hasFlag("--otp") || Boolean(email);
+    const manualOtp = hasFlag("--otp");
     const client = new OpenAIClient({
         email: email || undefined,
         password: appConfig.defaultPassword,
@@ -37,7 +46,8 @@ async function main() {
     let failCount = 0;
     const manualEmail = readArgValue("--email").trim();
     const authOnly = hasFlag("--auth");
-    const manualOtp = hasFlag("--otp") || Boolean(manualEmail);
+    const manualOtp = hasFlag("--otp");
+    const maxRounds = readNumberArg("--n");
 
     if (authOnly) {
         if (!manualEmail) {
@@ -69,7 +79,7 @@ async function main() {
         return;
     }
 
-    while (true) {
+    while (!maxRounds || round < maxRounds) {
         round += 1;
         console.log(
             `第 ${round} 轮开始: 成功=${successCount} 失败=${failCount} 模式=自动`,
@@ -84,14 +94,15 @@ async function main() {
             console.error(`[❌️授权失败]`, error);
         }
 
-        if (roundFailed && appConfig.failureDelayMs > 0) {
-            await new Promise((resolve) => setTimeout(resolve, appConfig.failureDelayMs));
-        }
-
         if (appConfig.loopDelayMs > 0) {
+            console.log(`[延迟] 轮次间等待 ${appConfig.loopDelayMs}ms`);
             await new Promise((resolve) => setTimeout(resolve, appConfig.loopDelayMs));
         }
     }
+
+    console.log(
+        `自动模式结束: 已执行=${round} 成功=${successCount} 失败=${failCount}`,
+    );
 }
 
 main().catch((error) => {
