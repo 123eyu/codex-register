@@ -1,6 +1,6 @@
 {
   "name": "codex-register",
-  "version": "1.0.3",
+  "version": "1.0.6",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "build": "tsup --config tsup.config.ts",
     "start": "node bundle/index.cjs",
     "check": "node bundle/check-auth-quota.cjs",
+    "check:cpa": "node bundle/check-auth-quota.cjs --cpa",
     "batch": "node bundle/batch-register.cjs"
   },
   "dependencies": {

@@ -10,6 +10,7 @@ import {SocksClient} from "socks";
 import makeFetchCookie from "fetch-cookie";
 import {CookieJar} from "tough-cookie";
 import {appConfig} from "./config.js";
+import {shouldAutoUploadAuthToCLIProxyAPI, uploadAuthFileToCLIProxyAPI} from "./cliproxyapi.js";
 import {defaultDeviceProfile, type DeviceProfile, getDeviceClientHints} from "./device-profile.js";
 import {
     AUTH_AUTHORIZE_CONTINUE_URL,
@@ -1001,6 +1002,18 @@ export class OpenAIClient {
         const fileName = `${date}-${safeEmail}.json`;
         const filePath = path.join(authDir, fileName);
         await writeFile(filePath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+
+        if (shouldAutoUploadAuthToCLIProxyAPI()) {
+            try {
+                await uploadAuthFileToCLIProxyAPI(fileName, record);
+                console.log(`cliproxyApiAuthUploaded: ${fileName}`);
+            } catch (error) {
+                console.warn(
+                    `cliproxyApiAuthUploadFailed: ${fileName} error=${error instanceof Error ? error.message : String(error)}`,
+                );
+            }
+        }
+
         return filePath;
     }
 

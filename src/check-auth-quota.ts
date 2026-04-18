@@ -2,6 +2,14 @@ import {cpus} from "node:os";
 import {mkdir, readdir, readFile, rename, writeFile} from "node:fs/promises";
 import path from "node:path";
 import {fetch as undiciFetch, Agent, ProxyAgent, type Dispatcher, type RequestInit as UndiciRequestInit} from "undici";
+import {
+    deleteAuthFileFromCLIProxyAPI,
+    downloadAuthFileJsonObjectFromCLIProxyAPI,
+    listAuthFilesFromCLIProxyAPI,
+    saveAuthFileJsonObjectToCLIProxyAPI,
+    setAuthFileDisabledStatusToCLIProxyAPI,
+    type CLIProxyAuthFileItem,
+} from "./cliproxyapi.js";
 import {appConfig} from "./config.js";
 import {AUTH_OAUTH_TOKEN_URLS, DEFAULT_CLIENT_ID, DEFAULT_USER_AGENT} from "./constants.js";
 
@@ -76,6 +84,15 @@ interface AuthSummary {
     movedTo401: boolean;
 }
 
+interface AuthTarget {
+    filePath: string;
+    loadRecord: () => Promise<AuthRecord>;
+    saveRecord: (record: AuthRecord) => Promise<void>;
+    moveTo401?: () => Promise<boolean>;
+    currentDisabled?: boolean;
+    setDisabled?: (disabled: boolean) => Promise<void>;
+}
+
 const DEFAULT_AUTH_DIR = path.resolve(process.cwd(), "auth");
 const REQUEST_TIMEOUT_MS = 15000;
 const USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
@@ -111,6 +128,67 @@ async function collectAuthFiles(rootDir: string): Promise<string[]> {
 
 async function loadAuthRecord(filePath: string): Promise<AuthRecord> {
     return JSON.parse(await readFile(filePath, "utf8")) as AuthRecord;
+}
+
+function normalizeCLIProxyAuthFileName(item: CLIProxyAuthFileItem): string {
+    return String(item?.name ?? "").trim();
+}
+
+function isCodexAuthRecord(record: Record<string, unknown>): boolean {
+    return typeof record?.access_token === "string" || typeof record?.refresh_token === "string";
+}
+
+function normalizeCLIProxyDisabled(value: unknown): boolean {
+    if (typeof value === "boolean") {
+        return value;
+    }
+    if (typeof value === "string") {
+        return value.trim().toLowerCase() === "true";
+    }
+    return false;
+}
+
+async function collectCPAAuthTargets(): Promise<AuthTarget[]> {
+    const files = await listAuthFilesFromCLIProxyAPI();
+    const targets = files
+        .filter((item) => {
+            const name = normalizeCLIProxyAuthFileName(item);
+            if (!name.toLowerCase().endsWith(".json")) {
+                return false;
+            }
+            if (typeof item?.type === "string" && item.type.trim() && item.type !== "codex") {
+                return false;
+            }
+            return true;
+        })
+        .map((item) => {
+            const name = normalizeCLIProxyAuthFileName(item);
+            const filePath = `cpa:${name}`;
+            const currentDisabled = normalizeCLIProxyDisabled(item.disabled);
+            return {
+                filePath,
+                currentDisabled,
+                async loadRecord() {
+                    const payload = await downloadAuthFileJsonObjectFromCLIProxyAPI(name);
+                    if (!isCodexAuthRecord(payload)) {
+                        throw new Error(`不是 codex auth 文件: ${name}`);
+                    }
+                    return payload as AuthRecord;
+                },
+                async saveRecord(record: AuthRecord) {
+                    await saveAuthFileJsonObjectToCLIProxyAPI(name, record as Record<string, unknown>);
+                },
+                async moveTo401() {
+                    await deleteAuthFileFromCLIProxyAPI(name);
+                    return true;
+                },
+                async setDisabled(disabled: boolean) {
+                    await setAuthFileDisabledStatusToCLIProxyAPI(name, disabled);
+                },
+            } satisfies AuthTarget;
+        });
+    targets.sort((left, right) => left.filePath.localeCompare(right.filePath));
+    return targets;
 }
 
 function decodeJwtClaims(token: string | undefined): JwtClaims | null {
@@ -480,7 +558,17 @@ async function mapWithConcurrency<T, R>(
 }
 
 async function summarizeAuth(filePath: string, forceRefresh: boolean): Promise<AuthSummary> {
-    let record = await loadAuthRecord(filePath);
+    return summarizeAuthTarget({
+        filePath,
+        loadRecord: () => loadAuthRecord(filePath),
+        saveRecord: (record) => saveAuthRecord(filePath, record),
+        moveTo401: () => moveTo401Dir(filePath),
+    }, forceRefresh);
+}
+
+async function summarizeAuthTarget(target: AuthTarget, forceRefresh: boolean): Promise<AuthSummary> {
+    const filePath = target.filePath;
+    let record = await target.loadRecord();
     const claims = decodeJwtClaims(record.id_token ?? record.access_token);
     const email = record.email?.trim() || claims?.email?.trim() || path.basename(filePath);
     const localPlan = claims?.["https://api.openai.com/auth"]?.chatgpt_plan_type?.trim() || "-";
@@ -512,7 +600,7 @@ async function summarizeAuth(filePath: string, forceRefresh: boolean): Promise<A
         const refreshed = await refreshAccessToken(record);
         if (refreshed.record) {
             record = refreshed.record;
-            await saveAuthRecord(filePath, record);
+            await target.saveRecord(record);
             probe = await sendUsageProbe(record.access_token ?? "", record.account_id?.trim() || "");
             message = extractMessage(probe.body);
         } else {
@@ -529,39 +617,41 @@ async function summarizeAuth(filePath: string, forceRefresh: boolean): Promise<A
 
     if (probe.status === 401) {
         if (shouldMoveTo401(message)) {
-            try {
-                movedTo401 = await moveTo401Dir(filePath);
-            } catch (error) {
-                const moveMessage = error instanceof Error ? error.message : String(error);
-                return {
-                    file: maskPath(filePath),
-                    email,
-                    plan: localPlan,
-                    status: "http_401",
-                    ok: false,
-                    used: "-",
-                    remaining: "-",
-                    reset: "-",
-                    limitReached: "-",
-                    expires: record.expired?.trim() || "-",
-                    note: `移动401目录失败: ${truncate(moveMessage, 40)}`,
-                    rawStatus: probe.status,
-                    rawBody: probe.body,
-                    movedTo401: false,
-                };
+            if (target.moveTo401) {
+                try {
+                    movedTo401 = await target.moveTo401();
+                } catch (error) {
+                    const moveMessage = error instanceof Error ? error.message : String(error);
+                    return {
+                        file: maskPath(filePath),
+                        email,
+                        plan: localPlan,
+                        status: "http_401",
+                        ok: false,
+                        used: "-",
+                        remaining: "-",
+                        reset: "-",
+                        limitReached: "-",
+                        expires: record.expired?.trim() || "-",
+                        note: `移动401目录失败: ${truncate(moveMessage, 40)}`,
+                        rawStatus: probe.status,
+                        rawBody: probe.body,
+                        movedTo401: false,
+                    };
+                }
             }
         } else {
             const refreshed = await refreshAccessToken(record);
             if (refreshed.record) {
                 record = refreshed.record;
-                await saveAuthRecord(filePath, record);
+                await target.saveRecord(record);
                 probe = await sendUsageProbe(record.access_token ?? "", record.account_id?.trim() || "");
                 message = extractMessage(probe.body);
             } else {
                 message = refreshed.error || message;
-                if (refreshed.status === 401) {
+                if (refreshed.status === 401 && target.moveTo401) {
                     try {
-                        movedTo401 = await moveTo401Dir(filePath);
+                        movedTo401 = await target.moveTo401();
                     } catch (error) {
                         const moveMessage = error instanceof Error ? error.message : String(error);
                         return {
@@ -588,10 +678,23 @@ async function summarizeAuth(filePath: string, forceRefresh: boolean): Promise<A
 
     const payload = parseJson<UsagePayload>(probe.body);
     const primary = payload?.rate_limit?.primary_window;
+    const remainingPercent = parsePercent(formatRemaining(primary?.used_percent));
     const note =
         probe.status === 200
             ? "请求成功"
             : message;
+
+    if (probe.status === 200 && target.setDisabled && remainingPercent != null) {
+        if (remainingPercent <= 5 && target.currentDisabled !== true) {
+            await target.setDisabled(true);
+            target.currentDisabled = true;
+            console.log(`cpaAuthDisabled: ${filePath} remaining=${remainingPercent.toFixed(2)}%`);
+        } else if (remainingPercent > 5 && target.currentDisabled === true) {
+            await target.setDisabled(false);
+            target.currentDisabled = false;
+            console.log(`cpaAuthEnabled: ${filePath} remaining=${remainingPercent.toFixed(2)}%`);
+        }
+    }
 
     return {
         file: maskPath(filePath),
@@ -615,28 +718,36 @@ async function summarizeAuth(filePath: string, forceRefresh: boolean): Promise<A
 }
 
 async function main(): Promise<void> {
-    const authDir = path.resolve(readFlagValue("--dir").trim() || DEFAULT_AUTH_DIR);
     const limitArg = Number.parseInt(readFlagValue("--limit").trim(), 10);
     const forceRefresh = hasFlag("--refresh");
     const verbose = hasFlag("--verbose");
-    const files = await collectAuthFiles(authDir);
-    const targetFiles =
-        Number.isFinite(limitArg) && limitArg > 0 ? files.slice(0, limitArg) : files;
+    const useCPA = hasFlag("--cpa");
+    const authDir = path.resolve(readFlagValue("--dir").trim() || DEFAULT_AUTH_DIR);
+    const targets = useCPA
+        ? await collectCPAAuthTargets()
+        : (await collectAuthFiles(authDir)).map((filePath) => ({
+            filePath,
+            loadRecord: () => loadAuthRecord(filePath),
+            saveRecord: (record: AuthRecord) => saveAuthRecord(filePath, record),
+            moveTo401: () => moveTo401Dir(filePath),
+        } satisfies AuthTarget));
+    const targetItems =
+        Number.isFinite(limitArg) && limitArg > 0 ? targets.slice(0, limitArg) : targets;
 
-    if (!targetFiles.length) {
-        throw new Error(`未在目录中找到授权文件: ${authDir}`);
+    if (!targetItems.length) {
+        throw new Error(useCPA ? "未在 CPA 中找到可检查的 codex 授权文件" : `未在目录中找到授权文件: ${authDir}`);
     }
 
-    const concurrency = resolveConcurrency(targetFiles.length);
+    const concurrency = resolveConcurrency(targetItems.length);
     console.log(
-        `准备检查 ${targetFiles.length} 个 auth 文件: ${authDir}${forceRefresh ? " (强制刷新 token)" : ""} (并发: ${concurrency})`,
+        `准备检查 ${targetItems.length} 个 auth 文件: ${useCPA ? "CPA" : authDir}${forceRefresh ? " (强制刷新 token)" : ""} (并发: ${concurrency})`,
     );
 
-    const indexedRows = await mapWithConcurrency<string, IndexedAuthSummary>(
-        targetFiles,
+    const indexedRows = await mapWithConcurrency<AuthTarget, IndexedAuthSummary>(
+        targetItems,
         concurrency,
-        async (filePath, index) => {
-            const row = await summarizeAuth(filePath, forceRefresh);
+        async (target, index) => {
+            const row = await summarizeAuthTarget(target, forceRefresh);
             printCheckLine(row);
             if (verbose) {
                 console.log(`RAW_STATUS: ${row.rawStatus}`);

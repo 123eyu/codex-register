@@ -6,6 +6,8 @@
   "loopDelayMs": 30000,
   "gmailAccessToken": "",
   "gmailEmailAddress": "",
+  "gptMailApiKey": "",
+  "gptMailDomain": "",
   "2925EmailAddress": "",
   "2925Password": "",
   "cloudflareEmailDomain": "",
@@ -15,5 +17,8 @@
   "heroSMSCountry": 52,
   "heroSMSMaxPrice": 0.05,
   "heroSMSPollAttempts": 10,
-  "heroSMSPollIntervalMs": 3000
+  "heroSMSPollIntervalMs": 3000,
+  "cliproxyApiAutoUploadAuth": false,
+  "cliproxyApiBaseUrl": "http://localhost:8317",
+  "cliproxyApiManagementKey": ""
 }

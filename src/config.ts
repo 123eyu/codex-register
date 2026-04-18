@@ -1,7 +1,7 @@
 import {readFileSync} from "node:fs";
 import path from "node:path";
 
-export type MailProviderName = "2925" | "gmail" | "proxiedmail" | "cloudflare" | "hotmail";
+export type MailProviderName = "2925" | "gmail" | "proxiedmail" | "cloudflare" | "hotmail" | "gptmail";
 
 interface AppConfigFile {
     provider?: unknown;
@@ -9,6 +9,8 @@ interface AppConfigFile {
     loopDelayMs?: unknown;
     gmailAccessToken?: unknown;
     gmailEmailAddress?: unknown;
+    gptMailApiKey?: unknown;
+    gptMailDomain?: unknown;
     "2925EmailAddress"?: unknown;
     "2925Password"?: unknown;
     cloudflareEmailDomain?: unknown;
@@ -20,6 +22,9 @@ interface AppConfigFile {
     heroSMSMaxPrice?: unknown;
     heroSMSPollAttempts?: unknown;
     heroSMSPollIntervalMs?: unknown;
+    cliproxyApiAutoUploadAuth?: unknown;
+    cliproxyApiBaseUrl?: unknown;
+    cliproxyApiManagementKey?: unknown;
 }
 
 export interface AppConfig {
@@ -28,6 +33,8 @@ export interface AppConfig {
     loopDelayMs: number;
     gmailAccessToken: string;
     gmailEmailAddress: string;
+    gptMailApiKey: string;
+    gptMailDomain: string;
     ["2925EmailAddress"]: string;
     ["2925Password"]: string;
     cloudflareEmailDomain: string;
@@ -39,6 +46,9 @@ export interface AppConfig {
     heroSMSMaxPrice: number;
     heroSMSPollAttempts: number;
     heroSMSPollIntervalMs: number;
+    cliproxyApiAutoUploadAuth: boolean;
+    cliproxyApiBaseUrl: string;
+    cliproxyApiManagementKey: string;
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -47,6 +57,8 @@ const DEFAULT_CONFIG: AppConfig = {
     loopDelayMs: 120000,
     gmailAccessToken: "",
     gmailEmailAddress: "",
+    gptMailApiKey: "",
+    gptMailDomain: "",
     "2925EmailAddress": "",
     "2925Password": "",
     cloudflareEmailDomain: "",
@@ -57,7 +69,10 @@ const DEFAULT_CONFIG: AppConfig = {
     heroSMSCountry: 52,
     heroSMSMaxPrice: 0.05,
     heroSMSPollAttempts: 10,
-    heroSMSPollIntervalMs: 3000
+    heroSMSPollIntervalMs: 3000,
+    cliproxyApiAutoUploadAuth: false,
+    cliproxyApiBaseUrl: "http://localhost:8317",
+    cliproxyApiManagementKey: "",
 };
 
 function normalizeNumber(value: unknown, fallback: number): number {
@@ -68,10 +83,26 @@ function normalizeNumber(value: unknown, fallback: number): number {
 }
 
 function normalizeProvider(value: unknown): MailProviderName {
-    if (value === "2925" || value === "gmail" || value === "proxiedmail" || value === "cloudflare" || value === "hotmail") {
+    if (value === "2925" || value === "gmail" || value === "proxiedmail" || value === "cloudflare" || value === "hotmail" || value === "gptmail") {
         return value;
     }
     return DEFAULT_CONFIG.provider;
+}
+
+function normalizeBoolean(value: unknown, fallback: boolean): boolean {
+    if (typeof value === "boolean") {
+        return value;
+    }
+    if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+        if (["true", "1", "yes", "on"].includes(normalized)) {
+            return true;
+        }
+        if (["false", "0", "no", "off"].includes(normalized)) {
+            return false;
+        }
+    }
+    return fallback;
 }
 
 function loadConfig(): AppConfig {
@@ -99,6 +130,14 @@ function loadConfig(): AppConfig {
             typeof parsed.gmailEmailAddress === "string"
                 ? parsed.gmailEmailAddress.trim()
                 : DEFAULT_CONFIG.gmailEmailAddress,
+        gptMailApiKey:
+            typeof parsed.gptMailApiKey === "string"
+                ? parsed.gptMailApiKey.trim()
+                : DEFAULT_CONFIG.gptMailApiKey,
+        gptMailDomain:
+            typeof parsed.gptMailDomain === "string"
+                ? parsed.gptMailDomain.trim()
+                : DEFAULT_CONFIG.gptMailDomain,
         "2925EmailAddress":
             typeof parsed["2925EmailAddress"] === "string"
                 ? parsed["2925EmailAddress"].trim()
@@ -143,7 +182,18 @@ function loadConfig(): AppConfig {
           typeof parsed.heroSMSPollIntervalMs === "number"
             ? parsed.heroSMSPollIntervalMs
             : DEFAULT_CONFIG.heroSMSPollIntervalMs,
-
+        cliproxyApiAutoUploadAuth: normalizeBoolean(
+            parsed.cliproxyApiAutoUploadAuth,
+            DEFAULT_CONFIG.cliproxyApiAutoUploadAuth,
+        ),
+        cliproxyApiBaseUrl:
+            typeof parsed.cliproxyApiBaseUrl === "string" && parsed.cliproxyApiBaseUrl.trim()
+                ? parsed.cliproxyApiBaseUrl.trim()
+                : DEFAULT_CONFIG.cliproxyApiBaseUrl,
+        cliproxyApiManagementKey:
+            typeof parsed.cliproxyApiManagementKey === "string"
+                ? parsed.cliproxyApiManagementKey.trim()
+                : DEFAULT_CONFIG.cliproxyApiManagementKey,
     };
 }
 

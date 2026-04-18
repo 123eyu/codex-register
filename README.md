@@ -1,7 +1,7 @@
 # <p align="center">codex-register</p>
 
 <p align="center">
-  <img alt="Version" src="https://img.shields.io/badge/version-v1.0.5-111827">
+  <img alt="Version" src="https://img.shields.io/badge/version-v1.0.6-111827">
   <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/klsf/codex-register?style=social">
 </p>
 
@@ -39,7 +39,10 @@ npm install
   "provider": "proxiedmail",
   "defaultProxyUrl": "http://127.0.0.1:10808",
   "defaultPassword": "kuaileshifu88",
-  "loopDelayMs": 120000
+  "loopDelayMs": 120000,
+  "cliproxyApiAutoUploadAuth": false,
+  "cliproxyApiBaseUrl": "http://localhost:8317",
+  "cliproxyApiManagementKey": ""
 }
 ```
 
@@ -77,6 +80,7 @@ npm run start
 
 ```bash
 npm run check
+npm run check:cpa
 ```
 
 ---
@@ -137,14 +141,19 @@ npm run dev -- --email your_mail@example.com --otp
 npm run dev -- --email your_mail@example.com --sign
 ```
 
+如果要启用短信验证，见教程：
+
+- [ADD_PHONE_HERO_SMS.md](./ADD_PHONE_HERO_SMS.md)
+
 ---
 
-## 状态及剩余额度检查：`npm run check`
+## 状态及剩余额度检查：`npm run check` / `npm run check:cpa`
 
 批量检查 `auth` 目录里的授权文件额度。
 
 ```bash
 npm run check -- [参数]
+npm run check:cpa -- [参数]
 ```
 
 ### 参数
@@ -163,6 +172,8 @@ npm run check -- [参数]
     - 最后输出表格
 - `--concurrency <数量>` 或 `-c <数量>`
     - 并发检查数量
+- `--cpa`
+    - 从 CLIProxyAPI 的 `auth-files` 里读取并检查 auth（`npm run check:cpa` 已内置）
 
 ### 示例
 
@@ -173,6 +184,8 @@ npm run check -- --concurrency 8
 npm run check -- --limit 50 -c 10
 npm run check -- --refresh --table
 npm run check -- --proxy http://127.0.0.1:7890 --table
+npm run check:cpa
+npm run check:cpa -- --refresh --limit 20 -c 8
 ```
 
 ### 输出说明
@@ -195,8 +208,29 @@ npm run check -- --proxy http://127.0.0.1:7890 --table
 - `总数`：检查的账号总数
 - `可用`：请求成功的账号数
 - `限额`：剩余额度为 `0%` 的账号数
-- `移除`：被移动到 `auth/401/` 的账号数
+- `移除`：被移除的账号数（本地模式移动到 `auth/401/`，CPA 模式通过 API 删除）
 - `可用额度`：所有可用账号剩余额度之和，按小数累计
+
+### `check:cpa` 说明
+
+`npm run check:cpa` 会：
+
+- 从 CLIProxyAPI 的 `auth-files` 拉取 auth 列表
+- 下载其中可识别的 codex 授权文件
+- 执行和本地 `check` 相同的额度检查
+- 如果检查过程中 refresh 成功，会把**更新后的 token 回写到 CPA 对应 auth 文件**
+- 如果命中需要移除的 401 凭证，会直接通过 CPA 的 `auth-files` API 删除
+- 会根据剩余额度自动调整 CPA auth 状态：
+  - `剩余额度 ≤ 5%`：如果当前是启用状态，则调用 API 停用
+  - `剩余额度 > 5%`：如果当前是停用状态，则调用 API 启用
+  - 如果当前状态本来就符合条件，则不会重复调用 API
+
+说明：
+
+- `check:cpa` 依赖以下配置：
+  - `cliproxyApiBaseUrl`
+  - `cliproxyApiManagementKey`
+- CPA 模式下的“移除”表示通过 API 删除远端 auth 文件，不会移动到本地 `auth/401/`
 
 ---
 
@@ -206,6 +240,7 @@ npm run check -- --proxy http://127.0.0.1:7890 --table
 
 - `proxiedmail`
 - `gmail`
+- `gptmail`
 - `hotmail`
 - `2925`
 - `cloudflare`
@@ -273,7 +308,35 @@ someone@hotmail.com----YourPassword123----a016c639-6112-4efe-b2cd-8ef74231bb97--
 - 读取收件箱和垃圾箱中的验证码邮件
 - 刷新后的 `refresh_token` 会回写到 `tokens.txt`
 
-### 4）2925
+### 4）gptmail
+
+```json
+{
+  "provider": "gptmail",
+  "gptMailApiKey": "your_gptmail_api_key",
+  "gptMailDomain": ""
+}
+```
+
+说明：
+
+- `gptMailApiKey`
+  - GPTMail API Key
+- `gptMailDomain`
+  - 可选，指定生成邮箱时使用的域名；留空则由服务端随机分配
+
+程序会：
+
+- 调用 GPTMail 的生成邮箱接口获取邮箱
+- 轮询邮件列表并读取邮件详情
+- 提取验证码
+- 命中后自动删除该邮件
+
+文档：
+
+- [GPTMail API 文档](https://mail.chatgpt.org.uk/zh/api)
+
+### 5）2925
 
 ```json
 {
@@ -283,7 +346,7 @@ someone@hotmail.com----YourPassword123----a016c639-6112-4efe-b2cd-8ef74231bb97--
 }
 ```
 
-### 5）cloudflare
+### 6）cloudflare
 
 ```json
 {
@@ -313,6 +376,10 @@ Cloudflare Worker 部署说明见：[MAIL_WORKER_DEPLOY.md](./MAIL_WORKER_DEPLOY
     - Gmail API access token
 - `gmailEmailAddress`
     - Gmail 主邮箱地址
+- `gptMailApiKey`
+    - GPTMail API Key
+- `gptMailDomain`
+    - GPTMail 指定生成邮箱时使用的域名，可留空
 - `hotmail`
     - 使用 `./hotmail/tokens.txt` 作为 Hotmail/Outlook 账号来源
 - `2925EmailAddress`
@@ -325,3 +392,27 @@ Cloudflare Worker 部署说明见：[MAIL_WORKER_DEPLOY.md](./MAIL_WORKER_DEPLOY
     - Cloudflare 邮件 Worker 地址
 - `cloudflareApiKey`
     - Cloudflare 邮件 Worker 的 `x-api-key`
+- `cliproxyApiAutoUploadAuth`
+    - 授权成功后是否自动上传 auth 文件到 CLIProxyAPI
+- `cliproxyApiBaseUrl`
+    - CLIProxyAPI 管理地址，例如 `http://localhost:8317`
+- `cliproxyApiManagementKey`
+    - CLIProxyAPI 的 `MANAGEMENT_KEY`
+
+## CLIProxyAPI 自动上传 auth
+
+如果你希望授权成功后，把新生成的 `auth/*.json` 自动上传到 CLIProxyAPI，可在 `config.json` 中开启：
+
+```json
+{
+  "cliproxyApiAutoUploadAuth": true,
+  "cliproxyApiBaseUrl": "http://localhost:8317",
+  "cliproxyApiManagementKey": "your_management_key"
+}
+```
+
+行为说明：
+
+- auth 文件仍然会先保存到本地 `./auth`
+- 然后再调用 CLIProxyAPI 管理接口上传
+- 上传失败不会中断主流程，只会输出警告日志

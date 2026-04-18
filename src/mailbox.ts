@@ -2,6 +2,7 @@ import {appConfig, type MailProviderName} from "./config.js";
 import {create2925Provider} from "./mail/2925.js";
 import {createCloudflareProvider} from "./mail/cloudflare.js";
 import {createGmailProvider} from "./mail/gmail.js";
+import {createGPTMailProvider} from "./mail/gptmail.js";
 import {createHotmailProvider} from "./mail/hotmail.js";
 import {createProxiedMailProvider} from "./mail/proxiedmail.js";
 
@@ -22,6 +23,8 @@ function createProvider(): EmailCodeProvider {
       return createProxiedMailProvider();
     case "gmail":
       return createGmailProvider();
+    case "gptmail":
+      return createGPTMailProvider();
     case "hotmail":
       return createHotmailProvider();
     case "2925":
